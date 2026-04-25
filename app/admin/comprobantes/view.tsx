@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { supabaseBrowser } from "@/lib/supabase/browser";
 import {
   Download,
   Filter,
@@ -66,22 +67,175 @@ export function ReceiptsView({
 }) {
   const router = useRouter();
   const sp = useSearchParams();
+  const spString = sp.toString();
   const [openFilters, setOpenFilters] = useState(false);
   const [openShare, setOpenShare] = useState(false);
   const [detail, setDetail] = useState<Row | null>(null);
   const [pending, start] = useTransition();
 
-  const [from, setFrom] = useState(sp.get("from") ?? "");
-  const [to, setTo] = useState(sp.get("to") ?? "");
-  const [branchSel, setBranchSel] = useState<string[]>(
-    sp.get("branch")?.split(",").filter(Boolean) ?? [],
+  // Realtime: refresh sólo si NO hay dialog abierto. Si hay, marcamos
+  // dirty y refrescamos cuando se cierre. Así no se cierran inesperadamente
+  // los formularios mientras el admin trabaja.
+  const dialogOpen = openFilters || openShare || !!detail;
+  const dialogOpenRef = useRef(dialogOpen);
+  const dirtyRef = useRef(false);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    dialogOpenRef.current = dialogOpen;
+    if (!dialogOpen && dirtyRef.current) {
+      dirtyRef.current = false;
+      router.refresh();
+    }
+  }, [dialogOpen, router]);
+
+  useEffect(() => {
+    const sb = supabaseBrowser();
+    const channel = sb
+      .channel("negros-receipts-admin")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "negros_receipts" },
+        () => {
+          if (dialogOpenRef.current) {
+            dirtyRef.current = true;
+            return;
+          }
+          if (refreshTimer.current) clearTimeout(refreshTimer.current);
+          refreshTimer.current = setTimeout(() => router.refresh(), 350);
+        },
+      )
+      .subscribe();
+    return () => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      sb.removeChannel(channel);
+    };
+  }, [router]);
+
+  // Filtros locales sincronizados con la URL — la URL es la fuente de verdad.
+  // Cualquier cambio en la URL (chip removido, back/forward) reescribe el state.
+  const urlFrom = sp.get("from") ?? "";
+  const urlTo = sp.get("to") ?? "";
+  const urlBranch = useMemo(
+    () => sp.get("branch")?.split(",").filter(Boolean) ?? [],
+    [sp],
   );
-  const [accountSel, setAccountSel] = useState<string[]>(
-    sp.get("account")?.split(",").filter(Boolean) ?? [],
+  const urlAccount = useMemo(
+    () => sp.get("account")?.split(",").filter(Boolean) ?? [],
+    [sp],
   );
-  const [staffSel, setStaffSel] = useState<string[]>(
-    sp.get("staff")?.split(",").filter(Boolean) ?? [],
+  const urlStaff = useMemo(
+    () => sp.get("staff")?.split(",").filter(Boolean) ?? [],
+    [sp],
   );
+
+  // State local del DIALOG de filtros (mientras está abierto, no toca URL)
+  const [from, setFrom] = useState(urlFrom);
+  const [to, setTo] = useState(urlTo);
+  const [branchSel, setBranchSel] = useState<string[]>(urlBranch);
+  const [accountSel, setAccountSel] = useState<string[]>(urlAccount);
+  const [staffSel, setStaffSel] = useState<string[]>(urlStaff);
+
+  // Cuando se abre el dialog, reseteo el state local desde la URL
+  useEffect(() => {
+    if (openFilters) {
+      setFrom(urlFrom);
+      setTo(urlTo);
+      setBranchSel(urlBranch);
+      setAccountSel(urlAccount);
+      setStaffSel(urlStaff);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openFilters]);
+
+  const hasActiveFilters = !!(
+    urlFrom || urlTo || urlBranch.length || urlAccount.length || urlStaff.length
+  );
+
+  const activeChips = useMemo(() => {
+    const chips: { key: string; label: string; remove: () => void }[] = [];
+    if (urlFrom) {
+      chips.push({
+        key: "from",
+        label: `Desde ${shortDate(urlFrom)}`,
+        remove: () => updateUrl({ from: "" }),
+      });
+    }
+    if (urlTo) {
+      chips.push({
+        key: "to",
+        label: `Hasta ${shortDate(urlTo)}`,
+        remove: () => updateUrl({ to: "" }),
+      });
+    }
+    urlBranch.forEach((id) => {
+      const b = branches.find((x) => x.id === id);
+      if (b) {
+        chips.push({
+          key: `b-${id}`,
+          label: b.name,
+          remove: () => updateUrl({ branch: urlBranch.filter((x) => x !== id) }),
+        });
+      }
+    });
+    urlAccount.forEach((id) => {
+      const a = accounts.find((x) => x.id === id);
+      if (a) {
+        chips.push({
+          key: `a-${id}`,
+          label: a.name,
+          remove: () => updateUrl({ account: urlAccount.filter((x) => x !== id) }),
+        });
+      }
+    });
+    urlStaff.forEach((id) => {
+      const s = staff.find((x) => x.id === id);
+      if (s) {
+        chips.push({
+          key: `s-${id}`,
+          label: s.name,
+          remove: () => updateUrl({ staff: urlStaff.filter((x) => x !== id) }),
+        });
+      }
+    });
+    return chips;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlFrom, urlTo, urlBranch, urlAccount, urlStaff, branches, accounts, staff]);
+
+  function updateUrl(
+    patch: Partial<{
+      from: string;
+      to: string;
+      branch: string[];
+      account: string[];
+      staff: string[];
+    }>,
+  ) {
+    const params = new URLSearchParams(spString);
+    if (patch.from !== undefined) {
+      patch.from ? params.set("from", patch.from) : params.delete("from");
+    }
+    if (patch.to !== undefined) {
+      patch.to ? params.set("to", patch.to) : params.delete("to");
+    }
+    if (patch.branch !== undefined) {
+      patch.branch.length
+        ? params.set("branch", patch.branch.join(","))
+        : params.delete("branch");
+    }
+    if (patch.account !== undefined) {
+      patch.account.length
+        ? params.set("account", patch.account.join(","))
+        : params.delete("account");
+    }
+    if (patch.staff !== undefined) {
+      patch.staff.length
+        ? params.set("staff", patch.staff.join(","))
+        : params.delete("staff");
+    }
+    params.set("page", "0");
+    router.push(`/admin/comprobantes?${params.toString()}`);
+  }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
@@ -95,15 +249,26 @@ export function ReceiptsView({
     return staff.filter((s) => branchSel.includes(s.branch_id));
   }, [staff, branchSel]);
 
+  // Cuando cambia la sucursal seleccionada en el dialog, limpiar las
+  // selecciones que ya no pertenecen a las sucursales filtradas.
+  useEffect(() => {
+    if (branchSel.length === 0) return;
+    setAccountSel((prev) =>
+      prev.filter((id) => accountsForBranch.some((a) => a.id === id)),
+    );
+    setStaffSel((prev) =>
+      prev.filter((id) => staffForBranch.some((s) => s.id === id)),
+    );
+  }, [branchSel, accountsForBranch, staffForBranch]);
+
   function applyFilters() {
-    const params = new URLSearchParams();
-    if (from) params.set("from", from);
-    if (to) params.set("to", to);
-    if (branchSel.length) params.set("branch", branchSel.join(","));
-    if (accountSel.length) params.set("account", accountSel.join(","));
-    if (staffSel.length) params.set("staff", staffSel.join(","));
-    params.set("page", "0");
-    router.push(`/admin/comprobantes?${params.toString()}`);
+    updateUrl({
+      from,
+      to,
+      branch: branchSel,
+      account: accountSel,
+      staff: staffSel,
+    });
     setOpenFilters(false);
   }
 
@@ -128,7 +293,7 @@ export function ReceiptsView({
 
   function changePage(delta: number) {
     const next = Math.min(Math.max(0, page + delta), totalPages - 1);
-    const params = new URLSearchParams(sp);
+    const params = new URLSearchParams(spString);
     params.set("page", String(next));
     router.push(`/admin/comprobantes?${params.toString()}`);
   }
@@ -191,6 +356,28 @@ export function ReceiptsView({
           </Button>
         </div>
       </header>
+
+      {/* Chips de filtros activos */}
+      {hasActiveFilters && (
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          {activeChips.map((c) => (
+            <button
+              key={c.key}
+              onClick={c.remove}
+              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-white text-black text-xs font-medium hover:bg-zinc-200 active:scale-95 transition-all"
+            >
+              {c.label}
+              <X className="size-3" />
+            </button>
+          ))}
+          <button
+            onClick={clearFilters}
+            className="inline-flex items-center h-7 px-2.5 rounded-full text-xs text-[var(--text-muted)] hover:text-white"
+          >
+            Limpiar todo
+          </button>
+        </div>
+      )}
 
       {rows.length === 0 ? (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-10 text-center">
@@ -606,12 +793,10 @@ function MultiPicker({
   value: string[];
   onChange: (v: string[]) => void;
 }) {
-  const toggle = (id: string) =>
-    onChange(value.includes(id) ? value.filter((v) => v !== id) : [...value, id]);
   return (
     <div className="flex flex-col gap-2">
       <Label>{label}</Label>
-      <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+      <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto">
         {items.length === 0 && (
           <span className="text-xs text-[var(--text-muted)]">Sin opciones</span>
         )}
@@ -621,12 +806,19 @@ function MultiPicker({
             <button
               key={it.id}
               type="button"
-              onClick={() => toggle(it.id)}
-              className={`text-xs px-3 h-8 rounded-full border transition-colors ${
+              aria-pressed={active}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onChange(
+                  active ? value.filter((v) => v !== it.id) : [...value, it.id],
+                );
+              }}
+              className={
                 active
-                  ? "bg-white text-black border-white"
-                  : "border-[var(--border-strong)] text-white hover:bg-[var(--surface-2)]"
-              }`}
+                  ? "text-xs px-3 h-9 rounded-full bg-white text-black border-2 border-white font-medium select-none active:scale-[0.97]"
+                  : "text-xs px-3 h-9 rounded-full bg-[var(--surface-2)] text-white border-2 border-[var(--border-strong)] select-none active:scale-[0.97]"
+              }
             >
               {it.label}
             </button>
@@ -777,4 +969,15 @@ function toLocalInput(d: Date) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
     d.getHours(),
   )}:${pad(d.getMinutes())}`;
+}
+
+function shortDate(s: string) {
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return s;
+  return new Intl.DateTimeFormat("es-AR", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
 }

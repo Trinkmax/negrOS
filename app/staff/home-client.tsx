@@ -8,6 +8,13 @@ import { toast } from "sonner";
 import imageCompression from "browser-image-compression";
 import { logoutStaffAction } from "@/lib/actions/staff-auth";
 import { uploadReceiptAction } from "@/lib/actions/receipts";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import type { AccountPublic } from "@/lib/db/types";
 
 export function StaffHomeClient({
@@ -25,6 +32,7 @@ export function StaffHomeClient({
   const fileRef = useRef<HTMLInputElement>(null);
   const [photo, setPhoto] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [confirmLogout, setConfirmLogout] = useState(false);
   const [pending, start] = useTransition();
   const firstName = staffName.split(" ")[0];
 
@@ -76,18 +84,28 @@ export function StaffHomeClient({
     if (!photo || pending) return;
     start(async () => {
       try {
+        // Comprobantes son texto sobre fondo plano: WebP con quality alta
+        // mantiene el texto perfectamente legible en ~150-300KB (vs 1-3MB
+        // de la foto cruda del celular).
+        const supportsWebp = typeof document !== "undefined"
+          ? document.createElement("canvas").toDataURL("image/webp").startsWith("data:image/webp")
+          : false;
+        const targetType = supportsWebp ? "image/webp" : "image/jpeg";
+        const ext = supportsWebp ? "webp" : "jpg";
+
         const compressed = await imageCompression(photo, {
-          maxSizeMB: 1.5,
-          maxWidthOrHeight: 1800,
+          maxSizeMB: 0.6,
+          maxWidthOrHeight: 1600,
           useWebWorker: true,
-          initialQuality: 0.82,
-          fileType: "image/jpeg",
+          initialQuality: 0.85,
+          fileType: targetType,
+          alwaysKeepResolution: false,
         });
         const fd = new FormData();
         fd.append("accountId", account.id);
         fd.append(
           "photo",
-          new File([compressed], `${account.id}.jpg`, { type: "image/jpeg" }),
+          new File([compressed], `${account.id}.${ext}`, { type: targetType }),
         );
         const res = await uploadReceiptAction(fd);
         if (res.ok) {
@@ -124,11 +142,7 @@ export function StaffHomeClient({
           </h1>
         </div>
         <button
-          onClick={() =>
-            toast("¿Cerrar sesión?", {
-              action: { label: "Salir", onClick: () => logoutStaffAction() },
-            })
-          }
+          onClick={() => setConfirmLogout(true)}
           className="size-10 rounded-full border border-[var(--border-strong)] flex items-center justify-center text-white hover:bg-[var(--surface-2)] active:scale-95 transition-all"
           aria-label="Cerrar sesión"
         >
@@ -167,6 +181,31 @@ export function StaffHomeClient({
           Ver mis comprobantes
         </Link>
       </section>
+
+      {/* Confirmación de cerrar sesión */}
+      <Dialog open={confirmLogout} onOpenChange={setConfirmLogout}>
+        <DialogContent>
+          <DialogHeader
+            title="¿Cerrar sesión?"
+            description="Vas a tener que volver a ingresar tu PIN."
+          />
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConfirmLogout(false)}>
+              Cancelar
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setConfirmLogout(false);
+                logoutStaffAction();
+              }}
+            >
+              <LogOut className="size-4" />
+              Salir
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Sheet de selección de cuenta — aparece cuando hay foto */}
       {photo && previewUrl && (

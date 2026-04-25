@@ -1,4 +1,5 @@
 "use server";
+
 import bcrypt from "bcryptjs";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -8,38 +9,68 @@ import {
   setStaffCookie,
   clearStaffCookie,
 } from "@/lib/auth/staff-session";
+import { pinLookup } from "@/lib/auth/pin-lookup";
 
 const PinSchema = z
   .string()
   .length(4, "El PIN tiene que ser de 4 dígitos")
   .regex(/^\d+$/, "Solo números");
 
-export type LoginPinResult =
-  | { ok: true }
-  | { ok: false; error: string };
+export type LoginPinResult = { ok: true } | { ok: false; error: string };
 
-export async function loginPinAction(
-  staffId: string,
-  pin: string,
-): Promise<LoginPinResult> {
+/**
+ * Login con solo PIN. Cada PIN es único entre staff activos.
+ * Lookup directo via HMAC(pin) — no recorremos toda la tabla.
+ *
+ * Fallback: si encontramos staff con pin_lookup nulo (creados antes de
+ * la migration 009), comparamos bcrypt contra cada uno y backfilleamos
+ * pin_lookup al primer match. Esto evita pedirle al admin regenerar
+ * todos los PINs.
+ */
+export async function loginPinAction(pin: string): Promise<LoginPinResult> {
   const parsed = PinSchema.safeParse(pin);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.errors[0]?.message ?? "PIN inválido" };
   }
-  if (!staffId) return { ok: false, error: "Falta staff" };
 
   const sb = supabaseAdmin();
-  const { data: staff, error } = await sb
+  const lookup = pinLookup(parsed.data);
+
+  // 1) Camino normal: lookup determinístico
+  const { data: byLookup } = await sb
     .from("negros_staff")
     .select("id, branch_id, name, pin_hash, is_active")
-    .eq("id", staffId)
+    .eq("pin_lookup", lookup)
+    .eq("is_active", true)
     .maybeSingle();
 
-  if (error || !staff || !staff.is_active) {
-    return { ok: false, error: "Usuario no disponible" };
+  let staff = byLookup;
+
+  // 2) Fallback para staff legacy sin pin_lookup
+  if (!staff) {
+    const { data: legacy } = await sb
+      .from("negros_staff")
+      .select("id, branch_id, name, pin_hash, is_active")
+      .eq("is_active", true)
+      .is("pin_lookup", null);
+    if (legacy) {
+      for (const row of legacy) {
+        if (await bcrypt.compare(parsed.data, row.pin_hash)) {
+          staff = row;
+          // backfill async — no esperamos
+          await sb
+            .from("negros_staff")
+            .update({ pin_lookup: lookup })
+            .eq("id", row.id);
+          break;
+        }
+      }
+    }
   }
 
-  const valid = await bcrypt.compare(pin, staff.pin_hash);
+  if (!staff) return { ok: false, error: "PIN incorrecto" };
+
+  const valid = await bcrypt.compare(parsed.data, staff.pin_hash);
   if (!valid) return { ok: false, error: "PIN incorrecto" };
 
   await sb
@@ -53,40 +84,10 @@ export async function loginPinAction(
     name: staff.name,
   });
   await setStaffCookie(token);
-
   return { ok: true };
 }
 
 export async function logoutStaffAction() {
   await clearStaffCookie();
   redirect("/login");
-}
-
-// ---------------------------------------------------------------------------
-// Listado de staff para la pantalla de login (todo el staff activo).
-// El staff ya pertenece a una sucursal, no la elige acá.
-// ---------------------------------------------------------------------------
-export async function listLoginStaffAction() {
-  const sb = supabaseAdmin();
-  const { data } = await sb
-    .from("negros_staff")
-    .select("id, name, avatar_url, branch_id, branch:negros_branches(name)")
-    .eq("is_active", true)
-    .order("name");
-  type Row = {
-    id: string;
-    name: string;
-    avatar_url: string | null;
-    branch_id: string;
-    branch: { name: string } | { name: string }[] | null;
-  };
-  return ((data ?? []) as Row[]).map((s) => ({
-    id: s.id,
-    name: s.name,
-    avatar_url: s.avatar_url,
-    branch_id: s.branch_id,
-    branch_name: Array.isArray(s.branch)
-      ? s.branch[0]?.name ?? ""
-      : s.branch?.name ?? "",
-  }));
 }

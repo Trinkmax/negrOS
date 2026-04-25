@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth/admin-guard";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { pinLookup } from "@/lib/auth/pin-lookup";
 
 const PIN_LEN = 4;
 
@@ -30,6 +31,27 @@ function generatePin(): string {
     pin += Math.floor(Math.random() * 10).toString();
   }
   return pin;
+}
+
+async function isPinTaken(pin: string, exceptStaffId?: string): Promise<boolean> {
+  const lookup = pinLookup(pin);
+  const sb = supabaseAdmin();
+  let q = sb
+    .from("negros_staff")
+    .select("id", { count: "exact", head: true })
+    .eq("pin_lookup", lookup)
+    .eq("is_active", true);
+  if (exceptStaffId) q = q.neq("id", exceptStaffId);
+  const { count } = await q;
+  return (count ?? 0) > 0;
+}
+
+async function uniqueGeneratedPin(exceptStaffId?: string): Promise<string> {
+  for (let i = 0; i < 25; i++) {
+    const pin = generatePin();
+    if (!(await isPinTaken(pin, exceptStaffId))) return pin;
+  }
+  throw new Error("No pudimos encontrar un PIN libre. Probá manualmente.");
 }
 
 export async function listStaffAction(branchId?: string) {
@@ -69,17 +91,35 @@ export async function createStaffAction(input: z.infer<typeof CreateStaffSchema>
     };
   }
   const { pin: providedPin, ...rest } = parsed.data;
-  const pin = providedPin && providedPin.length === PIN_LEN ? providedPin : generatePin();
-  const pin_hash = await bcrypt.hash(pin, 10);
+
+  let finalPin: string;
+  if (providedPin) {
+    if (await isPinTaken(providedPin)) {
+      return {
+        ok: false as const,
+        error: "Ese PIN ya lo está usando otro staff. Elegí otro.",
+      };
+    }
+    finalPin = providedPin;
+  } else {
+    try {
+      finalPin = await uniqueGeneratedPin();
+    } catch (e) {
+      return { ok: false as const, error: (e as Error).message };
+    }
+  }
+
+  const pin_hash = await bcrypt.hash(finalPin, 10);
+  const pin_lookup = pinLookup(finalPin);
   const sb = supabaseAdmin();
   const { data, error } = await sb
     .from("negros_staff")
-    .insert({ ...rest, pin_hash })
+    .insert({ ...rest, pin_hash, pin_lookup })
     .select("id, name")
     .single();
   if (error) return { ok: false as const, error: error.message };
   revalidatePath("/admin/staff");
-  return { ok: true as const, staff: data, pin };
+  return { ok: true as const, staff: data, pin: finalPin };
 }
 
 export async function updateStaffAction(
@@ -96,7 +136,7 @@ export async function updateStaffAction(
 }
 
 /**
- * Cambia el PIN del staff. Si `pin` viene vacío/null, genera uno aleatorio.
+ * Cambia el PIN del staff. Si `pin` viene vacío/null, genera uno aleatorio único.
  */
 export async function setStaffPinAction(id: string, pin?: string | null) {
   await requireAdmin();
@@ -109,15 +149,27 @@ export async function setStaffPinAction(id: string, pin?: string | null) {
         error: parsed.error.errors[0]?.message ?? "PIN inválido",
       };
     }
+    if (await isPinTaken(parsed.data, id)) {
+      return {
+        ok: false as const,
+        error: "Ese PIN ya lo está usando otro staff.",
+      };
+    }
     finalPin = parsed.data;
   } else {
-    finalPin = generatePin();
+    try {
+      finalPin = await uniqueGeneratedPin(id);
+    } catch (e) {
+      return { ok: false as const, error: (e as Error).message };
+    }
   }
+
   const pin_hash = await bcrypt.hash(finalPin, 10);
+  const pin_lookup = pinLookup(finalPin);
   const sb = supabaseAdmin();
   const { error } = await sb
     .from("negros_staff")
-    .update({ pin_hash, last_login_at: null })
+    .update({ pin_hash, pin_lookup, last_login_at: null })
     .eq("id", id);
   if (error) return { ok: false as const, error: error.message };
   revalidatePath("/admin/staff");

@@ -5,7 +5,8 @@ export function Toaster() {
   return (
     <Sonner
       theme="dark"
-      position="top-center"
+      position="bottom-center"
+      offset={24}
       richColors={false}
       toastOptions={{
         style: {

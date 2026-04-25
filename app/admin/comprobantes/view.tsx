@@ -12,7 +12,6 @@ import {
   X,
   Save,
   Share2,
-  Check,
   CheckCheck,
   Copy,
 } from "lucide-react";
@@ -39,8 +38,6 @@ type Row = {
   id: string;
   captured_at: string;
   photo_url: string | null;
-  paid_to_owner_at: string | null;
-  paid_to_owner_by: string | null;
   owner_confirmed_at: string | null;
   branch: { id: string; name: string };
   account: { id: string; name: string; color: string; icon: string | null };
@@ -206,17 +203,14 @@ export function ReceiptsView({
         <>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
             {rows.map((r) => {
-              const isPaid = !!r.paid_to_owner_at;
-              const isConfirmed = !!r.owner_confirmed_at;
+              const isReceived = !!r.owner_confirmed_at;
               return (
                 <button
                   key={r.id}
                   onClick={() => setDetail(r)}
                   className={`group relative aspect-[3/4] rounded-xl overflow-hidden bg-[var(--surface-2)] border ${
-                    isConfirmed
+                    isReceived
                       ? "border-white/40"
-                      : isPaid
-                      ? "border-white/20"
                       : "border-[var(--border)]"
                   } hover:border-[var(--border-strong)] active:scale-[0.99] transition-all text-left`}
                 >
@@ -250,18 +244,13 @@ export function ReceiptsView({
                       {formatDateTime(r.captured_at)}
                     </p>
                   </div>
-                  <div className="absolute top-2 left-2 flex flex-col gap-1">
-                    {isPaid && (
+                  {isReceived && (
+                    <div className="absolute top-2 left-2">
                       <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-white text-black font-semibold inline-flex items-center gap-1">
-                        <Check className="size-2.5" /> Pagado
+                        <CheckCheck className="size-2.5" /> Recibido
                       </span>
-                    )}
-                    {isConfirmed && (
-                      <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-black/70 text-white border border-white/30 inline-flex items-center gap-1">
-                        <CheckCheck className="size-2.5" /> Confirmado
-                      </span>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </button>
               );
             })}
@@ -696,27 +685,16 @@ function ReceiptDetail({
           )}
         </div>
         <div className="flex flex-col gap-4">
-          {/* Status block */}
+          {/* Pago recibido */}
           <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4 flex flex-col gap-3">
             <p className="text-[10px] uppercase tracking-[0.25em] text-[var(--text-muted)]">
-              Estado del pago
+              Pago de la financiera
             </p>
-            <div className="flex items-center gap-2">
-              <Badge active={!!row.paid_to_owner_at}>
-                <Check className="size-3" />
-                Pagado al dueño
-              </Badge>
-              <Badge active={!!row.owner_confirmed_at}>
-                <CheckCheck className="size-3" />
-                Confirmado
-              </Badge>
-            </div>
-            {row.paid_to_owner_at && (
-              <p className="text-[11px] text-[var(--text-muted)]">
-                Marcado por {row.paid_to_owner_by ?? "Financiera"} el{" "}
-                {formatDateTime(row.paid_to_owner_at)}
-              </p>
-            )}
+            <p className="text-sm text-white">
+              {row.owner_confirmed_at
+                ? `Recibido · ${formatDateTime(row.owner_confirmed_at)}`
+                : "Pendiente de cobro"}
+            </p>
             <Button
               size="sm"
               variant={row.owner_confirmed_at ? "outline" : "primary"}
@@ -725,7 +703,7 @@ function ReceiptDetail({
               className="self-start"
             >
               <CheckCheck className="size-4" />
-              {row.owner_confirmed_at ? "Quitar confirmación" : "Confirmar pago recibido"}
+              {row.owner_confirmed_at ? "Quitar confirmación" : "Marcar como recibido"}
             </Button>
           </div>
 
@@ -791,26 +769,6 @@ function ReceiptDetail({
         </Button>
       </DialogFooter>
     </DialogContent>
-  );
-}
-
-function Badge({
-  active,
-  children,
-}: {
-  active: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <span
-      className={`text-[10px] uppercase tracking-wider px-2 py-1 rounded-full inline-flex items-center gap-1 ${
-        active
-          ? "bg-white text-black"
-          : "bg-transparent text-[var(--text-muted)] border border-[var(--border)]"
-      }`}
-    >
-      {children}
-    </span>
   );
 }
 

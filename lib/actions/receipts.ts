@@ -140,7 +140,7 @@ export async function listReceiptsAction(input: ListFilters) {
     .from("negros_receipts")
     .select(
       `id, photo_path, captured_at, branch_id, account_id, staff_id,
-       paid_to_owner_at, paid_to_owner_by, owner_confirmed_at,
+       owner_confirmed_at,
        branch:negros_branches(id, name),
        account:negros_accounts(id, name, color, icon),
        staff:negros_staff(id, name, avatar_url)`,
@@ -167,8 +167,6 @@ export async function listReceiptsAction(input: ListFilters) {
     rows: rows.map((r) => ({
       id: r.id,
       captured_at: r.captured_at,
-      paid_to_owner_at: r.paid_to_owner_at,
-      paid_to_owner_by: r.paid_to_owner_by,
       owner_confirmed_at: r.owner_confirmed_at,
       photo_url: urlMap.get(r.photo_path) ?? null,
       branch: Array.isArray(r.branch) ? r.branch[0] : r.branch,

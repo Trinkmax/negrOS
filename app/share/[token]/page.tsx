@@ -19,12 +19,7 @@ export default async function SharePage({
   const sb = supabaseAdmin();
   let q = sb
     .from("negros_receipts")
-    .select(
-      `id, photo_path, captured_at, paid_to_owner_at, paid_to_owner_by, owner_confirmed_at,
-       branch:negros_branches(id, name),
-       account:negros_accounts(id, name, color, icon),
-       staff:negros_staff(id, name)`,
-    )
+    .select("id, photo_path, captured_at")
     .is("deleted_at", null)
     .gte("captured_at", ctx.date_from)
     .lte("captured_at", ctx.date_to)
@@ -32,12 +27,7 @@ export default async function SharePage({
   if (ctx.branch_id) q = q.eq("branch_id", ctx.branch_id);
   const { data } = await q;
 
-  const rows = (data ?? []).map((r) => ({
-    ...r,
-    branch: Array.isArray(r.branch) ? r.branch[0] : r.branch,
-    account: Array.isArray(r.account) ? r.account[0] : r.account,
-    staff: Array.isArray(r.staff) ? r.staff[0] : r.staff,
-  }));
+  const rows = data ?? [];
   const urlMap = await signReceiptUrls(rows.map((r) => r.photo_path));
 
   return (
@@ -48,14 +38,7 @@ export default async function SharePage({
       dateTo={ctx.date_to}
       rows={rows.map((r) => ({
         id: r.id,
-        captured_at: r.captured_at,
-        paid_to_owner_at: r.paid_to_owner_at,
-        paid_to_owner_by: r.paid_to_owner_by,
-        owner_confirmed_at: r.owner_confirmed_at,
         photo_url: urlMap.get(r.photo_path) ?? null,
-        branch: r.branch,
-        account: r.account,
-        staff: r.staff,
       }))}
     />
   );

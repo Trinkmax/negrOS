@@ -1,0 +1,10 @@
+.env.local
+.env*.local
+.next
+.next/
+node_modules
+.DS_Store
+.claude
+.mcp.json
+logo/negrOS.jpeg
+/tmp

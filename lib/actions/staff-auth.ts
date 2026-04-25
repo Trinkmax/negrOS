@@ -11,8 +11,7 @@ import {
 
 const PinSchema = z
   .string()
-  .min(4, "PIN muy corto")
-  .max(8, "PIN muy largo")
+  .length(4, "El PIN tiene que ser de 4 dígitos")
   .regex(/^\d+$/, "Solo números");
 
 export type LoginPinResult =

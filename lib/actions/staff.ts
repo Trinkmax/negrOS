@@ -8,11 +8,20 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 
 const PIN_LEN = 4;
 
+const PinFormat = z
+  .string()
+  .length(PIN_LEN, `El PIN tiene que ser de ${PIN_LEN} dígitos`)
+  .regex(/^\d+$/, "Solo números");
+
 const StaffSchema = z.object({
   branch_id: z.string().uuid(),
   name: z.string().min(1).max(80),
   avatar_url: z.string().url().optional().nullable(),
   is_active: z.boolean().default(true),
+});
+
+const CreateStaffSchema = StaffSchema.extend({
+  pin: PinFormat.optional().nullable(),
 });
 
 function generatePin(): string {
@@ -50,15 +59,22 @@ export async function listStaffAction(branchId?: string) {
   }>;
 }
 
-export async function createStaffAction(input: z.infer<typeof StaffSchema>) {
+export async function createStaffAction(input: z.infer<typeof CreateStaffSchema>) {
   await requireAdmin();
-  const parsed = StaffSchema.parse(input);
-  const pin = generatePin();
+  const parsed = CreateStaffSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false as const,
+      error: parsed.error.errors[0]?.message ?? "Datos inválidos",
+    };
+  }
+  const { pin: providedPin, ...rest } = parsed.data;
+  const pin = providedPin && providedPin.length === PIN_LEN ? providedPin : generatePin();
   const pin_hash = await bcrypt.hash(pin, 10);
   const sb = supabaseAdmin();
   const { data, error } = await sb
     .from("negros_staff")
-    .insert({ ...parsed, pin_hash })
+    .insert({ ...rest, pin_hash })
     .select("id, name")
     .single();
   if (error) return { ok: false as const, error: error.message };
@@ -79,10 +95,25 @@ export async function updateStaffAction(
   return { ok: true as const };
 }
 
-export async function regeneratePinAction(id: string) {
+/**
+ * Cambia el PIN del staff. Si `pin` viene vacío/null, genera uno aleatorio.
+ */
+export async function setStaffPinAction(id: string, pin?: string | null) {
   await requireAdmin();
-  const pin = generatePin();
-  const pin_hash = await bcrypt.hash(pin, 10);
+  let finalPin: string;
+  if (pin) {
+    const parsed = PinFormat.safeParse(pin);
+    if (!parsed.success) {
+      return {
+        ok: false as const,
+        error: parsed.error.errors[0]?.message ?? "PIN inválido",
+      };
+    }
+    finalPin = parsed.data;
+  } else {
+    finalPin = generatePin();
+  }
+  const pin_hash = await bcrypt.hash(finalPin, 10);
   const sb = supabaseAdmin();
   const { error } = await sb
     .from("negros_staff")
@@ -90,7 +121,7 @@ export async function regeneratePinAction(id: string) {
     .eq("id", id);
   if (error) return { ok: false as const, error: error.message };
   revalidatePath("/admin/staff");
-  return { ok: true as const, pin };
+  return { ok: true as const, pin: finalPin };
 }
 
 export async function deleteStaffAction(id: string) {

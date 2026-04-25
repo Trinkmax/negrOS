@@ -2,12 +2,20 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Pencil, Trash2, RefreshCw, Users, Copy } from "lucide-react";
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  KeyRound,
+  Users,
+  Copy,
+  Sparkles,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   createStaffAction,
   deleteStaffAction,
-  regeneratePinAction,
+  setStaffPinAction,
   updateStaffAction,
 } from "@/lib/actions/staff";
 import { Button } from "@/components/ui/button";
@@ -19,7 +27,7 @@ import {
   DialogFooter,
   DialogHeader,
 } from "@/components/ui/dialog";
-import { formatDateTime } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 import type { Branch } from "@/lib/db/types";
 
 type StaffRow = {
@@ -33,6 +41,8 @@ type StaffRow = {
   branch: Pick<Branch, "id" | "name">;
 };
 
+const PIN_LEN = 4;
+
 export function StaffView({
   staff,
   branches,
@@ -44,14 +54,17 @@ export function StaffView({
   const [filterBranch, setFilterBranch] = useState<string>("all");
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<StaffRow | null>(null);
+  const [pinDialogFor, setPinDialogFor] = useState<StaffRow | null>(null);
   const [pending, start] = useTransition();
 
-  // form
+  // form (create/edit)
   const [branchId, setBranchId] = useState<string>(branches[0]?.id ?? "");
   const [name, setName] = useState("");
   const [active, setActive] = useState(true);
+  const [pinChoice, setPinChoice] = useState<"auto" | "manual">("auto");
+  const [pinValue, setPinValue] = useState("");
 
-  // pin reveal
+  // pin reveal (after create / regenerate)
   const [revealedPin, setRevealedPin] = useState<{
     name: string;
     pin: string;
@@ -70,6 +83,8 @@ export function StaffView({
     setBranchId(branches[0]?.id ?? "");
     setName("");
     setActive(true);
+    setPinChoice("auto");
+    setPinValue("");
   }
 
   function openCreate() {
@@ -78,6 +93,7 @@ export function StaffView({
       return;
     }
     reset();
+    if (filterBranch !== "all") setBranchId(filterBranch);
     setOpen(true);
   }
 
@@ -91,33 +107,35 @@ export function StaffView({
 
   function save() {
     start(async () => {
-      const payload = { branch_id: branchId, name: name.trim(), is_active: active };
       if (editing) {
-        const res = await updateStaffAction(editing.id, payload);
+        const res = await updateStaffAction(editing.id, {
+          branch_id: branchId,
+          name: name.trim(),
+          is_active: active,
+        });
         if (res.ok) {
           toast.success("Actualizado");
           setOpen(false);
           router.refresh();
         } else toast.error(res.error);
       } else {
-        const res = await createStaffAction(payload);
+        const customPin = pinChoice === "manual" ? pinValue : null;
+        if (pinChoice === "manual" && !validPin(pinValue)) {
+          toast.error(`El PIN tiene que ser ${PIN_LEN} dígitos`);
+          return;
+        }
+        const res = await createStaffAction({
+          branch_id: branchId,
+          name: name.trim(),
+          is_active: active,
+          pin: customPin,
+        });
         if (res.ok) {
           setOpen(false);
           setRevealedPin({ name: res.staff.name, pin: res.pin });
           router.refresh();
         } else toast.error(res.error);
       }
-    });
-  }
-
-  function regenPin(s: StaffRow) {
-    if (!confirm(`¿Generar nuevo PIN para ${s.name}?`)) return;
-    start(async () => {
-      const res = await regeneratePinAction(s.id);
-      if (res.ok) {
-        setRevealedPin({ name: s.name, pin: res.pin });
-        router.refresh();
-      } else toast.error(res.error);
     });
   }
 
@@ -174,7 +192,7 @@ export function StaffView({
           <Users className="size-8 text-[var(--text-muted)] mx-auto" />
           <p className="text-sm text-white mt-3">Sin staff</p>
           <p className="text-xs text-[var(--text-muted)] mt-1 mb-4">
-            Cuando crees un staff te vamos a mostrar el PIN una sola vez.
+            El PIN lo elegís vos o lo genera el sistema.
           </p>
           <Button onClick={openCreate} variant="primary" size="sm">
             <Plus className="size-4" />
@@ -202,13 +220,7 @@ export function StaffView({
                   <td className="px-5 py-4">
                     <div className="flex items-center gap-3">
                       <div className="size-9 rounded-full bg-[var(--surface-3)] border border-[var(--border-strong)] flex items-center justify-center text-white text-sm">
-                        {s.name
-                          .split(" ")
-                          .map((p) => p[0])
-                          .filter(Boolean)
-                          .slice(0, 2)
-                          .join("")
-                          .toUpperCase()}
+                        {initials(s.name)}
                       </div>
                       <span className="text-white font-medium">{s.name}</span>
                     </div>
@@ -233,12 +245,12 @@ export function StaffView({
                   <td className="px-5 py-4 text-right">
                     <div className="flex justify-end gap-1">
                       <button
-                        onClick={() => regenPin(s)}
+                        onClick={() => setPinDialogFor(s)}
                         className="size-8 flex items-center justify-center rounded-md text-[var(--text-muted)] hover:text-white hover:bg-[var(--surface-2)] transition-colors"
-                        aria-label="Regenerar PIN"
-                        title="Regenerar PIN"
+                        aria-label="Cambiar PIN"
+                        title="Cambiar PIN"
                       >
-                        <RefreshCw className="size-4" />
+                        <KeyRound className="size-4" />
                       </button>
                       <button
                         onClick={() => openEdit(s)}
@@ -270,8 +282,8 @@ export function StaffView({
             title={editing ? "Editar staff" : "Nuevo staff"}
             description={
               editing
-                ? "Para regenerar el PIN usá el ícono ↻ en la fila."
-                : "Te vamos a mostrar el PIN auto-generado una sola vez."
+                ? "Para cambiar el PIN usá el ícono 🔑 en la fila."
+                : "Elegí el PIN o dejá que lo genere el sistema."
             }
           />
           <div className="flex flex-col gap-4">
@@ -300,6 +312,44 @@ export function StaffView({
                 ))}
               </select>
             </div>
+
+            {!editing && (
+              <div className="flex flex-col gap-2">
+                <Label>PIN ({PIN_LEN} dígitos)</Label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPinChoice("auto")}
+                    className={cn(
+                      "flex-1 h-11 rounded-lg border text-sm font-medium transition-colors flex items-center justify-center gap-2",
+                      pinChoice === "auto"
+                        ? "bg-white text-black border-white"
+                        : "border-[var(--border-strong)] text-white hover:bg-[var(--surface-2)]",
+                    )}
+                  >
+                    <Sparkles className="size-4" />
+                    Aleatorio
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPinChoice("manual")}
+                    className={cn(
+                      "flex-1 h-11 rounded-lg border text-sm font-medium transition-colors flex items-center justify-center gap-2",
+                      pinChoice === "manual"
+                        ? "bg-white text-black border-white"
+                        : "border-[var(--border-strong)] text-white hover:bg-[var(--surface-2)]",
+                    )}
+                  >
+                    <KeyRound className="size-4" />
+                    Elegirlo yo
+                  </button>
+                </div>
+                {pinChoice === "manual" && (
+                  <PinInput value={pinValue} onChange={setPinValue} />
+                )}
+              </div>
+            )}
+
             <label className="flex items-center gap-3 mt-1">
               <input
                 type="checkbox"
@@ -315,13 +365,34 @@ export function StaffView({
               Cancelar
             </Button>
             <Button onClick={save} disabled={pending || !name.trim() || !branchId}>
-              {pending ? "Guardando…" : editing ? "Guardar" : "Crear y mostrar PIN"}
+              {pending
+                ? "Guardando…"
+                : editing
+                ? "Guardar"
+                : pinChoice === "manual"
+                ? "Crear"
+                : "Crear y mostrar PIN"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* PIN reveal dialog (one-time) */}
+      {/* Cambiar PIN dialog */}
+      <Dialog open={!!pinDialogFor} onOpenChange={() => setPinDialogFor(null)}>
+        {pinDialogFor && (
+          <PinChangeDialog
+            staff={pinDialogFor}
+            onClose={() => setPinDialogFor(null)}
+            onDone={(pin) => {
+              setRevealedPin({ name: pinDialogFor.name, pin });
+              setPinDialogFor(null);
+              router.refresh();
+            }}
+          />
+        )}
+      </Dialog>
+
+      {/* PIN reveal */}
       <Dialog open={!!revealedPin} onOpenChange={() => setRevealedPin(null)}>
         <DialogContent>
           <DialogHeader
@@ -347,4 +418,122 @@ export function StaffView({
       </Dialog>
     </div>
   );
+}
+
+function PinChangeDialog({
+  staff,
+  onClose,
+  onDone,
+}: {
+  staff: StaffRow;
+  onClose: () => void;
+  onDone: (pin: string) => void;
+}) {
+  const [mode, setMode] = useState<"auto" | "manual">("auto");
+  const [pin, setPin] = useState("");
+  const [pending, start] = useTransition();
+
+  function submit() {
+    start(async () => {
+      if (mode === "manual" && !validPin(pin)) {
+        toast.error(`El PIN tiene que ser ${PIN_LEN} dígitos`);
+        return;
+      }
+      const res = await setStaffPinAction(staff.id, mode === "manual" ? pin : null);
+      if (res.ok) {
+        toast.success("PIN actualizado");
+        onDone(res.pin);
+      } else {
+        toast.error(res.error);
+      }
+    });
+  }
+
+  return (
+    <DialogContent>
+      <DialogHeader
+        title={`Cambiar PIN de ${staff.name}`}
+        description="El PIN anterior deja de funcionar."
+      />
+      <div className="flex flex-col gap-4">
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setMode("auto")}
+            className={cn(
+              "flex-1 h-11 rounded-lg border text-sm font-medium transition-colors flex items-center justify-center gap-2",
+              mode === "auto"
+                ? "bg-white text-black border-white"
+                : "border-[var(--border-strong)] text-white hover:bg-[var(--surface-2)]",
+            )}
+          >
+            <Sparkles className="size-4" />
+            Aleatorio
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("manual")}
+            className={cn(
+              "flex-1 h-11 rounded-lg border text-sm font-medium transition-colors flex items-center justify-center gap-2",
+              mode === "manual"
+                ? "bg-white text-black border-white"
+                : "border-[var(--border-strong)] text-white hover:bg-[var(--surface-2)]",
+            )}
+          >
+            <KeyRound className="size-4" />
+            Elegirlo yo
+          </button>
+        </div>
+        {mode === "manual" && <PinInput value={pin} onChange={setPin} autoFocus />}
+      </div>
+      <DialogFooter>
+        <Button variant="ghost" onClick={onClose} disabled={pending}>
+          Cancelar
+        </Button>
+        <Button onClick={submit} disabled={pending}>
+          {pending ? "Guardando…" : "Cambiar PIN"}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
+function PinInput({
+  value,
+  onChange,
+  autoFocus = false,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  autoFocus?: boolean;
+}) {
+  return (
+    <input
+      inputMode="numeric"
+      pattern="\d*"
+      maxLength={PIN_LEN}
+      autoFocus={autoFocus}
+      value={value}
+      onChange={(e) => {
+        const digits = e.target.value.replace(/\D/g, "").slice(0, PIN_LEN);
+        onChange(digits);
+      }}
+      placeholder="••••"
+      className="h-14 w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface-2)] text-center text-3xl text-white tracking-[0.6em] font-mono tabular focus:outline-none focus:ring-2 focus:ring-white"
+    />
+  );
+}
+
+function validPin(s: string) {
+  return /^\d{4}$/.test(s);
+}
+
+function initials(name: string) {
+  return name
+    .split(" ")
+    .map((p) => p[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
 }

@@ -32,6 +32,8 @@ export function LoginWizard({ staffList }: { staffList: Staff[] }) {
 
   useEffect(() => {
     if (!staff || pin.length < 4 || isPending) return;
+    // Solo intentar cuando completa los 4
+    if (pin.length !== 4) return;
     start(async () => {
       const res = await loginPinAction(staff.id, pin);
       if (res.ok) {
@@ -117,7 +119,7 @@ export function LoginWizard({ staffList }: { staffList: Staff[] }) {
           <PinKeypad
             value={pin}
             onChange={setPin}
-            maxLength={6}
+            maxLength={4}
             error={pinError}
             disabled={isPending}
           />

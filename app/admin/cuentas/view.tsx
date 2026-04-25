@@ -2,11 +2,20 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Pencil, Trash2, CreditCard } from "lucide-react";
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  CreditCard,
+  Eye,
+  EyeOff,
+  Building2,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   createAccountAction,
   deleteAccountAction,
+  setAccountVisibilityAction,
   updateAccountAction,
 } from "@/lib/actions/accounts";
 import { Button } from "@/components/ui/button";
@@ -18,6 +27,7 @@ import {
   DialogFooter,
   DialogHeader,
 } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
 import type { Branch, Account } from "@/lib/db/types";
 
 type AccountWithBranch = Account & { branch: Pick<Branch, "id" | "name"> };
@@ -45,6 +55,7 @@ export function AccountsView({
   const [editing, setEditing] = useState<AccountWithBranch | null>(null);
   const [pending, start] = useTransition();
   const [filterBranch, setFilterBranch] = useState<string>("all");
+  const [showHidden, setShowHidden] = useState(true);
 
   // form state
   const [branchId, setBranchId] = useState<string>(branches[0]?.id ?? "");
@@ -55,13 +66,22 @@ export function AccountsView({
   const [icon, setIcon] = useState("");
   const [active, setActive] = useState(true);
 
-  const filtered = useMemo(
-    () =>
-      filterBranch === "all"
-        ? accounts
-        : accounts.filter((a) => a.branch_id === filterBranch),
-    [accounts, filterBranch],
-  );
+  // Agrupar por sucursal con el filtro/visibility actual
+  const grouped = useMemo(() => {
+    const filtered = accounts.filter((a) => {
+      if (filterBranch !== "all" && a.branch_id !== filterBranch) return false;
+      if (!showHidden && !a.is_active) return false;
+      return true;
+    });
+    const map = new Map<string, { branch: Branch; items: AccountWithBranch[] }>();
+    for (const a of filtered) {
+      const branch = branches.find((b) => b.id === a.branch_id);
+      if (!branch) continue;
+      if (!map.has(branch.id)) map.set(branch.id, { branch, items: [] });
+      map.get(branch.id)!.items.push(a);
+    }
+    return [...map.values()];
+  }, [accounts, branches, filterBranch, showHidden]);
 
   function reset() {
     setEditing(null);
@@ -80,6 +100,7 @@ export function AccountsView({
       return;
     }
     reset();
+    if (filterBranch !== "all") setBranchId(filterBranch);
     setOpen(true);
   }
 
@@ -119,6 +140,21 @@ export function AccountsView({
     });
   }
 
+  function toggleVisible(a: AccountWithBranch) {
+    const next = !a.is_active;
+    start(async () => {
+      const res = await setAccountVisibilityAction(a.id, next);
+      if (res.ok) {
+        toast.success(
+          next
+            ? `“${a.name}” visible para el staff`
+            : `“${a.name}” oculta para el staff`,
+        );
+        router.refresh();
+      } else toast.error(res.error);
+    });
+  }
+
   function remove(a: AccountWithBranch) {
     if (!confirm(`¿Eliminar "${a.name}"?`)) return;
     start(async () => {
@@ -130,9 +166,12 @@ export function AccountsView({
     });
   }
 
+  const totalVisible = accounts.filter((a) => a.is_active).length;
+  const totalHidden = accounts.length - totalVisible;
+
   return (
     <div className="max-w-5xl">
-      <header className="flex items-center justify-between mb-8 gap-3">
+      <header className="flex items-center justify-between mb-8 gap-3 flex-wrap">
         <div className="min-w-0">
           <p className="text-[10px] uppercase tracking-[0.3em] text-[var(--text-muted)]">
             Configuración
@@ -140,8 +179,25 @@ export function AccountsView({
           <h1 className="text-3xl text-white font-semibold tracking-tight mt-1">
             Cuentas
           </h1>
+          <p className="text-xs text-[var(--text-muted)] mt-1 tabular">
+            {totalVisible} visible{totalVisible !== 1 ? "s" : ""}
+            {totalHidden > 0 && ` · ${totalHidden} oculta${totalHidden !== 1 ? "s" : ""}`}
+          </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          <button
+            onClick={() => setShowHidden((v) => !v)}
+            className={cn(
+              "inline-flex items-center gap-2 h-11 px-4 rounded-lg border text-sm transition-colors",
+              showHidden
+                ? "border-[var(--border-strong)] text-white bg-[var(--surface-2)]"
+                : "border-[var(--border)] text-[var(--text-muted)]",
+            )}
+            title={showHidden ? "Ocultar inactivas" : "Mostrar inactivas"}
+          >
+            {showHidden ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
+            {showHidden ? "Mostrando todas" : "Solo visibles"}
+          </button>
           <select
             value={filterBranch}
             onChange={(e) => setFilterBranch(e.target.value)}
@@ -161,7 +217,7 @@ export function AccountsView({
         </div>
       </header>
 
-      {filtered.length === 0 ? (
+      {grouped.length === 0 ? (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-10 text-center">
           <CreditCard className="size-8 text-[var(--text-muted)] mx-auto" />
           <p className="text-sm text-white mt-3">Sin cuentas</p>
@@ -174,59 +230,103 @@ export function AccountsView({
           </Button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {filtered.map((a) => (
-            <div
-              key={a.id}
-              className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 flex flex-col gap-4"
-            >
-              <div className="flex items-start justify-between">
-                <div
-                  className="size-10 rounded-full flex items-center justify-center text-base font-semibold text-black"
-                  style={{ background: a.color }}
-                >
-                  {a.icon || a.name[0]}
+        <div className="flex flex-col gap-8">
+          {grouped.map(({ branch, items }) => {
+            const visible = items.filter((a) => a.is_active).length;
+            return (
+              <section key={branch.id}>
+                <header className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Building2 className="size-4 text-[var(--text-muted)]" />
+                    <h2 className="text-sm text-white font-medium">{branch.name}</h2>
+                    <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] tabular">
+                      {visible}/{items.length} visibles
+                    </span>
+                  </div>
+                </header>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {items.map((a) => (
+                    <div
+                      key={a.id}
+                      className={cn(
+                        "rounded-2xl border bg-[var(--surface)] p-5 flex flex-col gap-4 transition-all",
+                        a.is_active
+                          ? "border-[var(--border)]"
+                          : "border-[var(--border)] opacity-60",
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div
+                          className={cn(
+                            "size-10 rounded-full flex items-center justify-center text-base font-semibold text-black",
+                            !a.is_active && "grayscale",
+                          )}
+                          style={{ background: a.color }}
+                        >
+                          {a.icon || a.name[0]}
+                        </div>
+                        <VisibilitySwitch
+                          checked={a.is_active}
+                          onChange={() => toggleVisible(a)}
+                          disabled={pending}
+                        />
+                      </div>
+                      <div>
+                        <p className="text-base text-white font-medium">{a.name}</p>
+                        <p className="text-xs text-[var(--text-muted)]">
+                          {a.bank ?? "—"}
+                        </p>
+                        {a.alias_cbu && (
+                          <p className="text-xs text-[var(--text-subtle)] mt-1 font-mono truncate">
+                            {a.alias_cbu}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex justify-between items-center mt-auto">
+                        <span
+                          className={cn(
+                            "text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border inline-flex items-center gap-1",
+                            a.is_active
+                              ? "border-white/20 text-white"
+                              : "border-[var(--border)] text-[var(--text-subtle)]",
+                          )}
+                        >
+                          {a.is_active ? (
+                            <>
+                              <Eye className="size-2.5" />
+                              Visible
+                            </>
+                          ) : (
+                            <>
+                              <EyeOff className="size-2.5" />
+                              Oculta
+                            </>
+                          )}
+                        </span>
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => openEdit(a)}
+                            className="size-8 flex items-center justify-center rounded-md text-[var(--text-muted)] hover:text-white hover:bg-[var(--surface-2)] transition-colors"
+                            aria-label="Editar"
+                          >
+                            <Pencil className="size-4" />
+                          </button>
+                          <button
+                            onClick={() => remove(a)}
+                            className="size-8 flex items-center justify-center rounded-md text-[var(--text-muted)] hover:text-[var(--danger)] hover:bg-[var(--surface-2)] transition-colors"
+                            aria-label="Eliminar"
+                          >
+                            <Trash2 className="size-4" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <span
-                  className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border ${
-                    a.is_active
-                      ? "border-white/20 text-white"
-                      : "border-[var(--border)] text-[var(--text-subtle)]"
-                  }`}
-                >
-                  {a.is_active ? "Activa" : "Inactiva"}
-                </span>
-              </div>
-              <div>
-                <p className="text-base text-white font-medium">{a.name}</p>
-                <p className="text-xs text-[var(--text-muted)]">
-                  {a.branch.name}
-                  {a.bank && ` · ${a.bank}`}
-                </p>
-                {a.alias_cbu && (
-                  <p className="text-xs text-[var(--text-subtle)] mt-1 font-mono truncate">
-                    {a.alias_cbu}
-                  </p>
-                )}
-              </div>
-              <div className="flex justify-end gap-1 mt-auto">
-                <button
-                  onClick={() => openEdit(a)}
-                  className="size-8 flex items-center justify-center rounded-md text-[var(--text-muted)] hover:text-white hover:bg-[var(--surface-2)] transition-colors"
-                  aria-label="Editar"
-                >
-                  <Pencil className="size-4" />
-                </button>
-                <button
-                  onClick={() => remove(a)}
-                  className="size-8 flex items-center justify-center rounded-md text-[var(--text-muted)] hover:text-[var(--danger)] hover:bg-[var(--surface-2)] transition-colors"
-                  aria-label="Eliminar"
-                >
-                  <Trash2 className="size-4" />
-                </button>
-              </div>
-            </div>
-          ))}
+              </section>
+            );
+          })}
         </div>
       )}
 
@@ -311,14 +411,17 @@ export function AccountsView({
                 ))}
               </div>
             </div>
-            <label className="flex items-center gap-3 mt-1">
-              <input
-                type="checkbox"
+            <label className="flex items-center justify-between gap-3 mt-1 px-3 py-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)]">
+              <div>
+                <p className="text-sm text-white font-medium">Visible para el staff</p>
+                <p className="text-xs text-[var(--text-muted)]">
+                  Si está oculta, no aparece en la pantalla de captura.
+                </p>
+              </div>
+              <VisibilitySwitch
                 checked={active}
-                onChange={(e) => setActive(e.target.checked)}
-                className="size-4 accent-white"
+                onChange={() => setActive((v) => !v)}
               />
-              <span className="text-sm text-white">Activa</span>
             </label>
           </div>
           <DialogFooter>
@@ -335,5 +438,37 @@ export function AccountsView({
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function VisibilitySwitch({
+  checked,
+  onChange,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={onChange}
+      disabled={disabled}
+      className={cn(
+        "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-50",
+        checked ? "bg-white" : "bg-[var(--surface-3)]",
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "pointer-events-none inline-block size-5 transform rounded-full shadow ring-0 transition duration-200",
+          checked ? "translate-x-5 bg-black" : "translate-x-0 bg-[var(--text-muted)]",
+        )}
+      />
+    </button>
   );
 }

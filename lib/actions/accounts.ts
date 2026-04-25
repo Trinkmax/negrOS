@@ -60,6 +60,30 @@ export async function updateAccountAction(
   return { ok: true as const };
 }
 
+export async function setAccountVisibilityAction(id: string, isActive: boolean) {
+  await requireAdmin();
+  const sb = supabaseAdmin();
+  const { error } = await sb
+    .from("negros_accounts")
+    .update({ is_active: isActive })
+    .eq("id", id);
+  if (error) return { ok: false as const, error: error.message };
+  revalidatePath("/admin/cuentas");
+  return { ok: true as const };
+}
+
+export async function reorderAccountAction(id: string, sortOrder: number) {
+  await requireAdmin();
+  const sb = supabaseAdmin();
+  const { error } = await sb
+    .from("negros_accounts")
+    .update({ sort_order: sortOrder })
+    .eq("id", id);
+  if (error) return { ok: false as const, error: error.message };
+  revalidatePath("/admin/cuentas");
+  return { ok: true as const };
+}
+
 export async function deleteAccountAction(id: string) {
   await requireAdmin();
   const sb = supabaseAdmin();

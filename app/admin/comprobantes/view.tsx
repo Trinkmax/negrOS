@@ -46,7 +46,7 @@ type Row = {
 };
 
 type StaffRow = { id: string; branch_id: string; name: string; avatar_url: string | null };
-type AccountRow = Account & { branch: { id: string; name: string } };
+type AccountRow = Account & { branches: { id: string; name: string }[] };
 
 export function ReceiptsView({
   rows,
@@ -241,7 +241,9 @@ export function ReceiptsView({
 
   const accountsForBranch = useMemo(() => {
     if (branchSel.length === 0) return accounts;
-    return accounts.filter((a) => branchSel.includes(a.branch_id));
+    return accounts.filter((a) =>
+      a.branches.some((b) => branchSel.includes(b.id)),
+    );
   }, [accounts, branchSel]);
 
   const staffForBranch = useMemo(() => {
@@ -519,7 +521,10 @@ export function ReceiptsView({
               label="Cuentas"
               items={accountsForBranch.map((a) => ({
                 id: a.id,
-                label: `${a.name} · ${a.branch.name}`,
+                label:
+                  a.branches.length === 1
+                    ? `${a.name} · ${a.branches[0].name}`
+                    : a.name,
               }))}
               value={accountSel}
               onChange={setAccountSel}
@@ -852,7 +857,9 @@ function ReceiptDetail({
   const [staffId, setStaffId] = useState(row.staff.id);
   const [note, setNote] = useState("");
 
-  const accountsForBranch = accounts.filter((a) => a.branch_id === row.branch.id);
+  const accountsForBranch = accounts.filter((a) =>
+    a.branches.some((b) => b.id === row.branch.id),
+  );
   const staffForBranch = staff.filter((s) => s.branch_id === row.branch.id);
 
   return (

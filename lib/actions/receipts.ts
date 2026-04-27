@@ -45,14 +45,15 @@ export async function uploadReceiptAction(formData: FormData): Promise<UploadRes
 
   const sb = supabaseAdmin();
 
-  // Defense in depth: cuenta debe pertenecer a la sucursal del staff
+  // Defense in depth: la cuenta debe estar activa y linkeada a la sucursal del staff
   const { data: account } = await sb
     .from("negros_accounts")
-    .select("id, branch_id, is_active")
+    .select("id, is_active, branches:negros_account_branches!inner(branch_id)")
     .eq("id", accountId)
+    .eq("negros_account_branches.branch_id", session.branchId)
     .maybeSingle();
 
-  if (!account || !account.is_active || account.branch_id !== session.branchId) {
+  if (!account || !account.is_active) {
     return { ok: false, error: "Cuenta no disponible" };
   }
 
@@ -186,7 +187,7 @@ export async function getReceiptAction(id: string) {
     .from("negros_receipts")
     .select(
       `*, branch:negros_branches(id, name),
-       account:negros_accounts(id, name, color, icon, branch_id),
+       account:negros_accounts(id, name, color, icon),
        staff:negros_staff(id, name, avatar_url, branch_id)`,
     )
     .eq("id", id)

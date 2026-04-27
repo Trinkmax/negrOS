@@ -9,7 +9,6 @@ import {
   CreditCard,
   Eye,
   EyeOff,
-  Building2,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -17,6 +16,7 @@ import {
   deleteAccountAction,
   setAccountVisibilityAction,
   updateAccountAction,
+  type AccountWithBranches,
 } from "@/lib/actions/accounts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,9 +28,7 @@ import {
   DialogHeader,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import type { Branch, Account } from "@/lib/db/types";
-
-type AccountWithBranch = Account & { branch: Pick<Branch, "id" | "name"> };
+import type { Branch } from "@/lib/db/types";
 
 const COLOR_OPTIONS = [
   "#FAFAFA",
@@ -47,18 +45,18 @@ export function AccountsView({
   accounts,
   branches,
 }: {
-  accounts: AccountWithBranch[];
+  accounts: AccountWithBranches[];
   branches: Branch[];
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<AccountWithBranch | null>(null);
+  const [editing, setEditing] = useState<AccountWithBranches | null>(null);
   const [pending, start] = useTransition();
   const [filterBranch, setFilterBranch] = useState<string>("all");
   const [showHidden, setShowHidden] = useState(true);
 
   // form state
-  const [branchId, setBranchId] = useState<string>(branches[0]?.id ?? "");
+  const [branchIds, setBranchIds] = useState<string[]>([]);
   const [name, setName] = useState("");
   const [bank, setBank] = useState("");
   const [aliasCbu, setAliasCbu] = useState("");
@@ -66,26 +64,21 @@ export function AccountsView({
   const [icon, setIcon] = useState("");
   const [active, setActive] = useState(true);
 
-  // Agrupar por sucursal con el filtro/visibility actual
-  const grouped = useMemo(() => {
-    const filtered = accounts.filter((a) => {
-      if (filterBranch !== "all" && a.branch_id !== filterBranch) return false;
+  const filtered = useMemo(() => {
+    return accounts.filter((a) => {
+      if (
+        filterBranch !== "all" &&
+        !a.branches.some((b) => b.id === filterBranch)
+      )
+        return false;
       if (!showHidden && !a.is_active) return false;
       return true;
     });
-    const map = new Map<string, { branch: Branch; items: AccountWithBranch[] }>();
-    for (const a of filtered) {
-      const branch = branches.find((b) => b.id === a.branch_id);
-      if (!branch) continue;
-      if (!map.has(branch.id)) map.set(branch.id, { branch, items: [] });
-      map.get(branch.id)!.items.push(a);
-    }
-    return [...map.values()];
-  }, [accounts, branches, filterBranch, showHidden]);
+  }, [accounts, filterBranch, showHidden]);
 
   function reset() {
     setEditing(null);
-    setBranchId(branches[0]?.id ?? "");
+    setBranchIds(branches.length === 1 ? [branches[0].id] : []);
     setName("");
     setBank("");
     setAliasCbu("");
@@ -100,13 +93,13 @@ export function AccountsView({
       return;
     }
     reset();
-    if (filterBranch !== "all") setBranchId(filterBranch);
+    if (filterBranch !== "all") setBranchIds([filterBranch]);
     setOpen(true);
   }
 
-  function openEdit(a: AccountWithBranch) {
+  function openEdit(a: AccountWithBranches) {
     setEditing(a);
-    setBranchId(a.branch_id);
+    setBranchIds(a.branches.map((b) => b.id));
     setName(a.name);
     setBank(a.bank ?? "");
     setAliasCbu(a.alias_cbu ?? "");
@@ -116,17 +109,30 @@ export function AccountsView({
     setOpen(true);
   }
 
+  function toggleBranch(id: string) {
+    setBranchIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  }
+
+  function selectAllBranches() {
+    setBranchIds(branches.map((b) => b.id));
+  }
+
   function save() {
+    if (branchIds.length === 0) {
+      toast.error("Elegí al menos una sucursal");
+      return;
+    }
     start(async () => {
       const payload = {
-        branch_id: branchId,
         name: name.trim(),
         bank: bank.trim() || null,
         alias_cbu: aliasCbu.trim() || null,
         color,
         icon: icon.trim() || null,
-        sort_order: 0,
         is_active: active,
+        branch_ids: branchIds,
       };
       const res = editing
         ? await updateAccountAction(editing.id, payload)
@@ -140,7 +146,7 @@ export function AccountsView({
     });
   }
 
-  function toggleVisible(a: AccountWithBranch) {
+  function toggleVisible(a: AccountWithBranches) {
     const next = !a.is_active;
     start(async () => {
       const res = await setAccountVisibilityAction(a.id, next);
@@ -155,7 +161,7 @@ export function AccountsView({
     });
   }
 
-  function remove(a: AccountWithBranch) {
+  function remove(a: AccountWithBranches) {
     if (!confirm(`¿Eliminar "${a.name}"?`)) return;
     start(async () => {
       const res = await deleteAccountAction(a.id);
@@ -168,6 +174,8 @@ export function AccountsView({
 
   const totalVisible = accounts.filter((a) => a.is_active).length;
   const totalHidden = accounts.length - totalVisible;
+  const allBranchesSelected =
+    branchIds.length === branches.length && branches.length > 0;
 
   return (
     <div className="max-w-5xl">
@@ -217,7 +225,7 @@ export function AccountsView({
         </div>
       </header>
 
-      {grouped.length === 0 ? (
+      {filtered.length === 0 ? (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-10 text-center">
           <CreditCard className="size-8 text-[var(--text-muted)] mx-auto" />
           <p className="text-sm text-white mt-3">Sin cuentas</p>
@@ -230,103 +238,100 @@ export function AccountsView({
           </Button>
         </div>
       ) : (
-        <div className="flex flex-col gap-8">
-          {grouped.map(({ branch, items }) => {
-            const visible = items.filter((a) => a.is_active).length;
-            return (
-              <section key={branch.id}>
-                <header className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <Building2 className="size-4 text-[var(--text-muted)]" />
-                    <h2 className="text-sm text-white font-medium">{branch.name}</h2>
-                    <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] tabular">
-                      {visible}/{items.length} visibles
-                    </span>
-                  </div>
-                </header>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {items.map((a) => (
-                    <div
-                      key={a.id}
-                      className={cn(
-                        "rounded-2xl border bg-[var(--surface)] p-5 flex flex-col gap-4 transition-all",
-                        a.is_active
-                          ? "border-[var(--border)]"
-                          : "border-[var(--border)] opacity-60",
-                      )}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div
-                          className={cn(
-                            "size-10 rounded-full flex items-center justify-center text-base font-semibold text-black",
-                            !a.is_active && "grayscale",
-                          )}
-                          style={{ background: a.color }}
-                        >
-                          {a.icon || a.name[0]}
-                        </div>
-                        <VisibilitySwitch
-                          checked={a.is_active}
-                          onChange={() => toggleVisible(a)}
-                          disabled={pending}
-                        />
-                      </div>
-                      <div>
-                        <p className="text-base text-white font-medium">{a.name}</p>
-                        <p className="text-xs text-[var(--text-muted)]">
-                          {a.bank ?? "—"}
-                        </p>
-                        {a.alias_cbu && (
-                          <p className="text-xs text-[var(--text-subtle)] mt-1 font-mono truncate">
-                            {a.alias_cbu}
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex justify-between items-center mt-auto">
-                        <span
-                          className={cn(
-                            "text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border inline-flex items-center gap-1",
-                            a.is_active
-                              ? "border-white/20 text-white"
-                              : "border-[var(--border)] text-[var(--text-subtle)]",
-                          )}
-                        >
-                          {a.is_active ? (
-                            <>
-                              <Eye className="size-2.5" />
-                              Visible
-                            </>
-                          ) : (
-                            <>
-                              <EyeOff className="size-2.5" />
-                              Oculta
-                            </>
-                          )}
-                        </span>
-                        <div className="flex gap-1">
-                          <button
-                            onClick={() => openEdit(a)}
-                            className="size-8 flex items-center justify-center rounded-md text-[var(--text-muted)] hover:text-white hover:bg-[var(--surface-2)] transition-colors"
-                            aria-label="Editar"
-                          >
-                            <Pencil className="size-4" />
-                          </button>
-                          <button
-                            onClick={() => remove(a)}
-                            className="size-8 flex items-center justify-center rounded-md text-[var(--text-muted)] hover:text-[var(--danger)] hover:bg-[var(--surface-2)] transition-colors"
-                            aria-label="Eliminar"
-                          >
-                            <Trash2 className="size-4" />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {filtered.map((a) => (
+            <div
+              key={a.id}
+              className={cn(
+                "rounded-2xl border bg-[var(--surface)] p-5 flex flex-col gap-4 transition-all",
+                a.is_active
+                  ? "border-[var(--border)]"
+                  : "border-[var(--border)] opacity-60",
+              )}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div
+                  className={cn(
+                    "size-10 rounded-full flex items-center justify-center text-base font-semibold text-black",
+                    !a.is_active && "grayscale",
+                  )}
+                  style={{ background: a.color }}
+                >
+                  {a.icon || a.name[0]}
                 </div>
-              </section>
-            );
-          })}
+                <VisibilitySwitch
+                  checked={a.is_active}
+                  onChange={() => toggleVisible(a)}
+                  disabled={pending}
+                />
+              </div>
+              <div>
+                <p className="text-base text-white font-medium">{a.name}</p>
+                <p className="text-xs text-[var(--text-muted)]">
+                  {a.bank ?? "—"}
+                </p>
+                {a.alias_cbu && (
+                  <p className="text-xs text-[var(--text-subtle)] mt-1 font-mono truncate">
+                    {a.alias_cbu}
+                  </p>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {a.branches.length === branches.length ? (
+                  <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border border-white/20 text-white">
+                    Todas las sucursales
+                  </span>
+                ) : (
+                  a.branches.map((b) => (
+                    <span
+                      key={b.id}
+                      className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border border-[var(--border)] text-[var(--text-muted)]"
+                    >
+                      {b.name}
+                    </span>
+                  ))
+                )}
+              </div>
+              <div className="flex justify-between items-center mt-auto">
+                <span
+                  className={cn(
+                    "text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border inline-flex items-center gap-1",
+                    a.is_active
+                      ? "border-white/20 text-white"
+                      : "border-[var(--border)] text-[var(--text-subtle)]",
+                  )}
+                >
+                  {a.is_active ? (
+                    <>
+                      <Eye className="size-2.5" />
+                      Visible
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="size-2.5" />
+                      Oculta
+                    </>
+                  )}
+                </span>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => openEdit(a)}
+                    className="size-8 flex items-center justify-center rounded-md text-[var(--text-muted)] hover:text-white hover:bg-[var(--surface-2)] transition-colors"
+                    aria-label="Editar"
+                  >
+                    <Pencil className="size-4" />
+                  </button>
+                  <button
+                    onClick={() => remove(a)}
+                    className="size-8 flex items-center justify-center rounded-md text-[var(--text-muted)] hover:text-[var(--danger)] hover:bg-[var(--surface-2)] transition-colors"
+                    aria-label="Eliminar"
+                  >
+                    <Trash2 className="size-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -338,19 +343,42 @@ export function AccountsView({
           />
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
-              <Label htmlFor="a-branch">Sucursal</Label>
-              <select
-                id="a-branch"
-                value={branchId}
-                onChange={(e) => setBranchId(e.target.value)}
-                className="h-11 rounded-lg border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white"
-              >
-                {branches.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
+              <div className="flex items-center justify-between">
+                <Label>Sucursales</Label>
+                <button
+                  type="button"
+                  onClick={
+                    allBranchesSelected ? () => setBranchIds([]) : selectAllBranches
+                  }
+                  className="text-xs text-[var(--text-muted)] hover:text-white transition-colors"
+                >
+                  {allBranchesSelected ? "Ninguna" : "Todas"}
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {branches.map((b) => {
+                  const checked = branchIds.includes(b.id);
+                  return (
+                    <button
+                      key={b.id}
+                      type="button"
+                      onClick={() => toggleBranch(b.id)}
+                      className={cn(
+                        "h-11 px-3 rounded-lg border text-sm text-left transition-colors",
+                        checked
+                          ? "border-white bg-white text-black"
+                          : "border-[var(--border-strong)] bg-[var(--surface-2)] text-white hover:border-white/40",
+                      )}
+                      aria-pressed={checked}
+                    >
+                      {b.name}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-[var(--text-muted)]">
+                La cuenta va a aparecer en cada sucursal seleccionada.
+              </p>
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="a-name">Nombre que ve el staff</Label>
@@ -430,7 +458,7 @@ export function AccountsView({
             </Button>
             <Button
               onClick={save}
-              disabled={pending || !name.trim() || !branchId}
+              disabled={pending || !name.trim() || branchIds.length === 0}
             >
               {pending ? "Guardando…" : "Guardar"}
             </Button>

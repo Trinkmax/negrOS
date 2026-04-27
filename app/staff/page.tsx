@@ -13,7 +13,7 @@ export default async function StaffHomePage() {
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
 
-  const [{ count: todayCount }, { data: branch }, { data: accounts }] =
+  const [{ count: todayCount }, { data: branch }, { data: accountLinks }] =
     await Promise.all([
       sb
         .from("negros_receipts")
@@ -27,20 +27,37 @@ export default async function StaffHomePage() {
         .eq("id", session.branchId)
         .maybeSingle(),
       sb
-        .from("negros_accounts")
-        .select("id, branch_id, name, bank, color, icon, sort_order")
+        .from("negros_account_branches")
+        .select(
+          "sort_order, account:negros_accounts!inner(id, name, bank, color, icon, is_active)",
+        )
         .eq("branch_id", session.branchId)
-        .eq("is_active", true)
-        .order("sort_order")
-        .order("name"),
+        .eq("account.is_active", true)
+        .order("sort_order"),
     ]);
+
+  const accounts: AccountPublic[] = (accountLinks ?? [])
+    .map((row) => {
+      const account = Array.isArray(row.account) ? row.account[0] : row.account;
+      if (!account || !account.is_active) return null;
+      return {
+        id: account.id,
+        name: account.name,
+        bank: account.bank,
+        color: account.color,
+        icon: account.icon,
+        sort_order: row.sort_order,
+      };
+    })
+    .filter((a): a is AccountPublic => a !== null)
+    .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
 
   return (
     <StaffHomeClient
       staffName={session.name}
       branchName={branch?.name ?? ""}
       todayCount={todayCount ?? 0}
-      accounts={(accounts ?? []) as AccountPublic[]}
+      accounts={accounts}
     />
   );
 }

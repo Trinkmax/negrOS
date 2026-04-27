@@ -52,7 +52,10 @@ export async function deleteBranchAction(id: string) {
   // Solo permitir borrar si no tiene staff/cuentas/recibos asociados
   const [{ count: staff }, { count: accts }, { count: rcpts }] = await Promise.all([
     sb.from("negros_staff").select("id", { count: "exact", head: true }).eq("branch_id", id),
-    sb.from("negros_accounts").select("id", { count: "exact", head: true }).eq("branch_id", id),
+    sb
+      .from("negros_account_branches")
+      .select("account_id", { count: "exact", head: true })
+      .eq("branch_id", id),
     sb.from("negros_receipts").select("id", { count: "exact", head: true }).eq("branch_id", id),
   ]);
   if ((staff ?? 0) + (accts ?? 0) + (rcpts ?? 0) > 0) {

@@ -9,16 +9,21 @@ export type Branch = {
 
 export type Account = {
   id: string;
-  branch_id: string;
   name: string;
   bank: string | null;
   alias_cbu: string | null;
   color: string;
   icon: string | null;
-  sort_order: number;
   is_active: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type AccountBranch = {
+  account_id: string;
+  branch_id: string;
+  sort_order: number;
+  created_at: string;
 };
 
 export type Staff = {
@@ -61,5 +66,5 @@ export type StaffPublic = Pick<Staff, "id" | "name" | "avatar_url" | "branch_id"
 
 export type AccountPublic = Pick<
   Account,
-  "id" | "name" | "bank" | "color" | "icon" | "sort_order" | "branch_id"
->;
+  "id" | "name" | "bank" | "color" | "icon"
+> & { sort_order: number };
